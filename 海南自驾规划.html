@@ -2821,9 +2821,28 @@ Panel.openPoiLib = function () {
 const Poster = {
   orientation: 'portrait',   // portrait | landscape
   lastCanvas: null,
+  prefs: null,               // { labels: bool, range: 'island'|'trip' }
 };
 
 const FONT = '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif';
+
+/* ---------- 海报显示偏好（localStorage 持久化，读写均容错） ---------- */
+const POSTER_PREFS_KEY = 'hainanTrip.posterPrefs';
+function loadPosterPrefs() {
+  const def = { labels: true, range: 'island' };
+  try {
+    const d = JSON.parse(localStorage.getItem(POSTER_PREFS_KEY));
+    if (!d || typeof d !== 'object') return def;
+    return {
+      labels: typeof d.labels === 'boolean' ? d.labels : def.labels,
+      range: d.range === 'trip' ? 'trip' : 'island',
+    };
+  } catch (e) { return def; }
+}
+function savePosterPrefs() {
+  try { localStorage.setItem(POSTER_PREFS_KEY, JSON.stringify(Poster.prefs)); } catch (e) { /* ignore */ }
+}
+Poster.prefs = loadPosterPrefs();
 
 function rr(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -2889,12 +2908,29 @@ function islandBBox() {
   return { minX, minY, maxX, maxY };
 }
 
-/* 在矩形内绘制地图面板，返回投影函数 */
-function drawMapPanel(ctx, plan, rect) {
+/* 当前方案全部停留点的 bbox：四边外扩 8%，跨度不足 0.05° 时取最小跨度（防单点/近距点群夸张放大） */
+function tripBBox(plan) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  collectRoutes(plan).days.forEach(d => d.stops.forEach(s => {
+    if (s.lng < minX) minX = s.lng; if (s.lng > maxX) maxX = s.lng;
+    if (s.lat < minY) minY = s.lat; if (s.lat > maxY) maxY = s.lat;
+  }));
+  if (!isFinite(minX)) return islandBBox();
+  const MIN_SPAN = 0.05;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  let sx = Math.max(maxX - minX, MIN_SPAN) * 1.16;
+  let sy = Math.max(maxY - minY, MIN_SPAN) * 1.16;
+  return { minX: cx - sx / 2, minY: cy - sy / 2, maxX: cx + sx / 2, maxY: cy + sy / 2 };
+}
+
+/* 在矩形内绘制地图面板，返回投影函数。
+   opts.bounds: 自定义投影范围（WGS-84 bbox，缺省为全岛）；opts.labels: 是否绘制站点名称（缺省 true） */
+function drawMapPanel(ctx, plan, rect, opts) {
+  opts = opts || {};
   const { x, y, w, h } = rect;
   const pad = Math.round(w * 0.055);
   // 投影（等经纬 + 纬度余弦修正）——先于任何绘制，避免 TDZ 引用错误
-  const bb = islandBBox();
+  const bb = opts.bounds || islandBBox();
   const midLat = (bb.minY + bb.maxY) / 2;
   const dLng = (bb.maxX - bb.minX) * Math.cos(midLat * Math.PI / 180);
   const dLat = (bb.maxY - bb.minY);
@@ -2992,13 +3028,15 @@ function drawMapPanel(ctx, plan, rect) {
       ctx.fillStyle = '#FFFFFF';
       ctx.font = `700 15px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(String(s.num), px, py + 0.5);
-      const right = px < x + w * 0.72;
-      ctx.font = `600 17px ${FONT}`;
-      ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'middle';
-      const tx = right ? px + 21 : px - 21;
-      const ty = py + (s.num % 2 === 0 ? -18 : 18);
-      halo(ctx, s.name, tx, ty, '#4A5A60', 4);
-      ctx.textAlign = 'center';
+      if (opts.labels !== false) {
+        const right = px < x + w * 0.72;
+        ctx.font = `600 17px ${FONT}`;
+        ctx.textAlign = right ? 'left' : 'right'; ctx.textBaseline = 'middle';
+        const tx = right ? px + 21 : px - 21;
+        const ty = py + (s.num % 2 === 0 ? -18 : 18);
+        halo(ctx, s.name, tx, ty, '#4A5A60', 4);
+        ctx.textAlign = 'center';
+      }
     });
   });
   // 指北针 + 图例
@@ -3115,6 +3153,10 @@ function renderPoster(plan, orientation, scale) {
   const portrait = orientation !== 'landscape';
   const W = portrait ? 1080 : 1920;
   const mc = scratchCtx();
+  const mapOpts = {
+    labels: !(Poster.prefs && Poster.prefs.labels === false),
+    bounds: Poster.prefs && Poster.prefs.range === 'trip' ? tripBBox(plan) : null,
+  };
 
   // ---- 先排版度量，得出自适应高度（宽度固定，高度随内容伸展） ----
   let hm, listH, H;
@@ -3143,7 +3185,7 @@ function renderPoster(plan, orientation, scale) {
   if (portrait) {
     posterHeader(ctx, plan, W / 2, W, 54, 62);
     const mapRect = { x: 56, y: hm.subY + 34, w: W - 112, h: 1000 };
-    drawMapPanel(ctx, plan, mapRect);
+    drawMapPanel(ctx, plan, mapRect, mapOpts);
     const listY = mapRect.y + mapRect.h + 34;
     dayList(ctx, plan, 64, listY, W - 128, true);
     const stats = `🛣️ 全程约 ${st.km} km　·　📍 ${st.stops} 个停留点　·　🏛️ 途经 ${st.counties} 市县`;
@@ -3160,7 +3202,7 @@ function renderPoster(plan, orientation, scale) {
   } else {
     const rx = 1250, rw = W - rx - 56;
     const mapRect = { x: 56, y: 56, w: 1130, h: H - 112 };
-    drawMapPanel(ctx, plan, mapRect);
+    drawMapPanel(ctx, plan, mapRect, mapOpts);
     posterHeader(ctx, plan, rx + rw / 2, rw, 46, 54);
     const listY = hm.subY + 26;
     dayList(ctx, plan, rx, listY, rw, true);
@@ -3197,6 +3239,14 @@ Poster.openModal = function () {
           <button class="btn btn-xs ${Poster.orientation === 'portrait' ? 'btn-primary' : ''}" data-o="portrait">竖版 · 朋友圈</button>
           <button class="btn btn-xs ${Poster.orientation === 'landscape' ? 'btn-primary' : ''}" data-o="landscape">横版 · 打印/电脑</button>
         </div>
+        <div class="seg">
+          <button class="btn btn-xs" data-labels="1" title="地图上绘制站点名称文字（可能重叠）">🏷️ 名称标注</button>
+          <button class="btn btn-xs" data-labels="0" title="只显示编号徽章，不显示名称文字">🔢 仅编号</button>
+        </div>
+        <div class="seg">
+          <button class="btn btn-xs" data-range="island" title="地图范围为海南全岛">🗺️ 全岛</button>
+          <button class="btn btn-xs" data-range="trip" title="自动缩放到本次行程的停留点范围">📌 行程</button>
+        </div>
         <button class="btn btn-primary" data-x="download">⬇️ 下载高清 PNG</button>
       </div>
       <div class="poster-preview-wrap"><canvas id="poster-canvas"></canvas></div>
@@ -3209,12 +3259,20 @@ Poster.openModal = function () {
     canvas.getContext('2d').drawImage(c, 0, 0);
     canvas.style.aspectRatio = `${c.width}/${c.height}`;
   };
+  const syncSegs = () => {
+    $$('[data-o]', m).forEach(b => b.classList.toggle('btn-primary', b.dataset.o === Poster.orientation));
+    $$('[data-labels]', m).forEach(b => b.classList.toggle('btn-primary', (b.dataset.labels === '1') === !!Poster.prefs.labels));
+    $$('[data-range]', m).forEach(b => b.classList.toggle('btn-primary', b.dataset.range === Poster.prefs.range));
+  };
+  syncSegs();
   render();
   m.querySelector('.poster-toolbar').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-o]'); if (!b) return;
-    Poster.orientation = b.dataset.o;
-    $$('[data-o]', m).forEach(x => x.classList.toggle('btn-primary', x.dataset.o === Poster.orientation));
-    render();
+    const ob = e.target.closest('[data-o]');
+    if (ob) { Poster.orientation = ob.dataset.o; syncSegs(); render(); return; }
+    const lb = e.target.closest('[data-labels]');
+    if (lb) { Poster.prefs.labels = lb.dataset.labels === '1'; savePosterPrefs(); syncSegs(); render(); return; }
+    const rb = e.target.closest('[data-range]');
+    if (rb) { Poster.prefs.range = rb.dataset.range; savePosterPrefs(); syncSegs(); render(); }
   });
   m.querySelector('[data-x="download"]').onclick = () => {
     toast('生成高清图…');
