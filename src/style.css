@@ -163,6 +163,13 @@ textarea { resize: vertical; width: 100%; }
 .leg-strip:hover .leg-btns { opacity: 1; }
 .leg-note { width: 100%; font-size: 12px; color: var(--warn); background: #FFFAF1; border-radius: 8px; padding: 4px 8px; margin-top: 2px; line-height: 1.45; }
 
+/* 拖拽排序：插入指示线 / 日期签拖放高亮 / 复制到其他天 */
+.drop-indicator { height: 4px; border-radius: 2px; background: var(--teal); margin: 3px 8px; box-shadow: 0 1px 8px rgba(14, 116, 144, .55); }
+.day-chip.drop-target { box-shadow: 0 0 0 2px var(--teal); transform: scale(1.08); }
+.copy-days { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.copy-day { display: flex; align-items: center; gap: 8px; text-align: left; justify-content: flex-start; }
+.copy-day .hint { margin-left: auto; }
+
 /* ---------- 地图 ---------- */
 #mapwrap { flex: 1; position: relative; min-width: 0; }
 #map { position: absolute; inset: 0; background: #BFE0E8; }

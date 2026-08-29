@@ -86,6 +86,7 @@ Panel.buildDayCard = function (day) {
       </div>
       <span class="stop-btns">
         <button class="ibtn" data-act="stop-edit" title="编辑/备注" data-day="${day.id}" data-stop="${s.id}">✏️</button>
+        <button class="ibtn" data-act="stop-copy" title="复制到其他天（复用此地点，如次日同一酒店）" data-day="${day.id}" data-stop="${s.id}">⧉</button>
         <button class="ibtn" data-act="stop-del" title="删除" data-day="${day.id}" data-stop="${s.id}">🗑</button>
       </span></div>`;
   }).join('');
@@ -133,6 +134,7 @@ Panel.bind = function () {
       return;
     }
     if (act === 'stop-edit') return Panel.openStopEditor(btn.dataset.day, btn.dataset.stop);
+    if (act === 'stop-copy') return Panel.openCopyStop(btn.dataset.day, btn.dataset.stop);
     if (act === 'leg-note') return Panel.openLegEditor(btn.dataset.day, btn.dataset.stop);
     if (act === 'leg-draw') return MV.enterDraw(btn.dataset.day, btn.dataset.stop);
     if (act === 'leg-route') return Panel.amapRoute(findStop(btn.dataset.day, btn.dataset.stop));
@@ -169,44 +171,95 @@ Panel.bind = function () {
     if (e.target.closest('[data-field]')) { Panel.render(); MV.renderAll(); }
   });
 
-  // 停留点拖拽排序
-  let dragId = null;
+  // 停留点拖拽排序：整个行程卡与日期签都是有效放置区，带插入指示线，支持跨天移动与边缘自动滚动
+  let dragId = null, dragFromDay = null, dropIdx = -1;
+  let lastY = 0, scrollRAF = 0, indEl = null, chipEl = null;
+  const panelBody = $('#panel-body');
+  const setChip = (chip) => {
+    if (chipEl) chipEl.classList.remove('drop-target');
+    chipEl = chip || null;
+    if (chipEl) chipEl.classList.add('drop-target');
+  };
+  const setIndicator = (listEl, idx) => {
+    if (!indEl) { indEl = document.createElement('div'); indEl.className = 'drop-indicator'; }
+    const cards = $$('.stop-card', listEl);
+    if (idx >= cards.length) { listEl.appendChild(indEl); return; }
+    const ref = cards[idx];
+    const strip = ref.previousElementSibling;
+    listEl.insertBefore(indEl, strip && strip.classList.contains('leg-strip') ? strip : ref);
+  };
+  const clearDnD = () => {
+    dragId = dragFromDay = null; dropIdx = -1; lastY = 0;
+    if (scrollRAF) { cancelAnimationFrame(scrollRAF); scrollRAF = 0; }
+    if (indEl) { indEl.remove(); indEl = null; }
+    setChip(null);
+  };
+  const scrollStep = () => {
+    if (!dragId) { scrollRAF = 0; return; }
+    const r = panelBody.getBoundingClientRect();
+    const edge = 56, speed = 12;
+    if (lastY >= r.top && lastY < r.top + edge) panelBody.scrollTop -= speed;
+    else if (lastY <= r.bottom && lastY > r.bottom - edge) panelBody.scrollTop += speed;
+    scrollRAF = requestAnimationFrame(scrollStep);
+  };
+  const stopListOf = (e) => {
+    const inList = e.target.closest('.day-stops');
+    if (inList) return inList;
+    const cardEl = e.target.closest('.day-card');
+    return cardEl ? cardEl.querySelector('.day-stops') : null;
+  };
+  const dropIndexOf = (listEl, clientY) => {
+    let idx = 0;
+    $$('.stop-card', listEl).forEach(c => {
+      const r = c.getBoundingClientRect();
+      if (clientY > r.top + r.height / 2) idx++;
+    });
+    return idx;
+  };
+
   $('#panel').addEventListener('dragstart', (e) => {
     const card = e.target.closest('.stop-card'); if (!card) return;
     dragId = card.dataset.stop;
+    dragFromDay = card.dataset.day;
     e.dataTransfer.effectAllowed = 'move';
     try { e.dataTransfer.setData('text/plain', dragId); } catch (x) { }
+    if (!scrollRAF) scrollRAF = requestAnimationFrame(scrollStep);
   });
   $('#panel').addEventListener('dragover', (e) => {
-    const card = e.target.closest('.stop-card');
-    if (card && card.dataset.stop !== dragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+    if (!dragId) return;
+    lastY = e.clientY;
+    const chip = e.target.closest('.day-chip[data-day]');
+    if (chip && chip.dataset.day !== dragFromDay) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+      setChip(chip);
+      if (indEl) { indEl.remove(); indEl = null; }
+      return;
+    }
+    const listEl = stopListOf(e);
+    if (listEl) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+      setChip(null);
+      dropIdx = dropIndexOf(listEl, e.clientY);
+      setIndicator(listEl, dropIdx);
+    }
   });
   $('#panel').addEventListener('drop', (e) => {
-    const card = e.target.closest('.stop-card'); if (!card || !dragId) return;
-    e.preventDefault();
-    const p = currentPlan();
-    const day = p.days.find(d => d.id === card.dataset.day); if (!day) return;
-    const from = day.stops.findIndex(s => s.id === dragId);
-    const to = day.stops.findIndex(s => s.id === card.dataset.stop);
-    if (from < 0 || to < 0 || from === to) return;
-    const [moved] = day.stops.splice(from, 1);
-    day.stops.splice(to, 0, moved);
-    // 受影响的 leg 重置为草稿（保留备注）
-    day.stops.forEach((s, i) => {
-      if (i === 0) return;
-      const prev = day.stops[i - 1];
-      const leg = s.leg;
-      if (leg && leg.mode !== 'draft' && leg.line) {
-        const start = leg.line[0], end = leg.line[leg.line.length - 1];
-        if (Math.abs(start[0] - prev.lng) > 1e-6 || Math.abs(start[1] - prev.lat) > 1e-6 ||
-            Math.abs(end[0] - s.lng) > 1e-6 || Math.abs(end[1] - s.lat) > 1e-6) {
-          leg.mode = 'draft'; leg.line = null; leg.distKm = null; leg.durMin = null;
-        }
-      }
-    });
-    dragId = null;
-    requestSave(); Panel.render(); MV.renderAll();
+    if (!dragId) return;
+    const chip = e.target.closest('.day-chip[data-day]');
+    if (chip && chip.dataset.day !== dragFromDay) {
+      e.preventDefault();
+      Panel.moveStopToDay(dragId, chip.dataset.day);
+      clearDnD();
+      return;
+    }
+    const listEl = stopListOf(e);
+    if (listEl && dropIdx >= 0) {
+      e.preventDefault();
+      Panel.reorderStop(dragFromDay, dragId, dropIdx);
+    }
+    clearDnD();
   });
+  $('#panel').addEventListener('dragend', clearDnD);
 };
 
 /* ---------- 添加停留点 ---------- */
@@ -230,6 +283,94 @@ Panel.addStopAfter = function (found) {
   requestSave(); Panel.render(); MV.renderAll();
   toast('已添加，可拖动标记调整位置');
   Panel.openStopEditor(found.day.id, s.id, true);
+};
+
+/* 结构变化（排序/跨天移动/复制）后检查一天内各段：与停留点不再吻合的路线段重置为草稿（保留备注） */
+function normalizeDayLegs(day) {
+  day.stops.forEach((s, i) => {
+    if (i === 0 || !s.leg || s.leg.mode === 'draft' || !s.leg.line) return;
+    const prev = day.stops[i - 1];
+    const leg = s.leg;
+    const start = leg.line[0], end = leg.line[leg.line.length - 1];
+    if (Math.abs(start[0] - prev.lng) > 1e-6 || Math.abs(start[1] - prev.lat) > 1e-6 ||
+        Math.abs(end[0] - s.lng) > 1e-6 || Math.abs(end[1] - s.lat) > 1e-6) {
+      leg.mode = 'draft'; leg.line = null; leg.distKm = null; leg.durMin = null;
+    }
+  });
+}
+
+/* 同一天内排序（toIdx 为插入槽位 0..n） */
+Panel.reorderStop = function (dayId, stopId, toIdxRaw) {
+  const day = currentPlan().days.find(d => d.id === dayId); if (!day) return;
+  const from = day.stops.findIndex(s => s.id === stopId); if (from < 0) return;
+  let to = clamp(toIdxRaw, 0, day.stops.length);
+  if (to === from || to === from + 1) return; // 落回原位
+  const [moved] = day.stops.splice(from, 1);
+  if (from < to) to--;
+  day.stops.splice(to, 0, moved);
+  normalizeDayLegs(day);
+  requestSave(); Panel.render(); MV.renderAll();
+};
+
+/* 跨天移动（拖到日期签）：从源天取出，追加到目标天末尾 */
+Panel.moveStopToDay = function (stopId, toDayId) {
+  const p = currentPlan();
+  const fromDay = p.days.find(d => d.stops.some(s => s.id === stopId)); if (!fromDay) return;
+  const toDay = p.days.find(d => d.id === toDayId);
+  if (!toDay || toDay === fromDay) return;
+  const [moved] = fromDay.stops.splice(fromDay.stops.findIndex(s => s.id === stopId), 1);
+  moved.leg = toDay.stops.length ? newLeg({ note: moved.leg ? moved.leg.note : newNote() }) : null;
+  toDay.stops.push(moved);
+  normalizeDayLegs(fromDay);
+  App.ui.activeDayId = toDay.id;
+  requestSave(); Panel.render(); MV.renderAll();
+  toast(`已把「${moved.name}」移动到 D${p.days.indexOf(toDay) + 1}`);
+};
+
+/* 复制停留点到某天（独立副本：新 id、路线段重置；名称/类型/坐标/点位备注沿用，之后两边互不联动） */
+Panel.cloneStopToDay = function (stop, day, pos) {
+  const cp = JSON.parse(JSON.stringify(stop));
+  cp.id = uid('s');
+  cp.leg = day.stops.length ? newLeg() : null;
+  if (pos === 'start') {
+    day.stops.unshift(cp);
+    if (day.stops[1] && !day.stops[1].leg) day.stops[1].leg = newLeg();
+  } else {
+    day.stops.push(cp);
+  }
+  return cp;
+};
+
+/* 「⧉ 复制到其他天」弹窗：选插入位置 + 目标天 */
+Panel.openCopyStop = function (dayId, stopId) {
+  const f = findStop(dayId, stopId); if (!f) return;
+  const p = currentPlan();
+  let pos = 'end';
+  const m = showModal(`
+    <h3>⧉ 复制到其他天 <span class="hint">「${esc(f.stop.name)}」将作为独立副本加入，之后两边互不联动</span></h3>
+    <div class="modal-body">
+      <div class="form-row"><label>插入位置</label>
+        <div class="seg">
+          <button class="btn btn-xs btn-primary" data-pos="end">当天末尾</button>
+          <button class="btn btn-xs" data-pos="start">当天开头</button>
+        </div>
+      </div>
+      <div class="copy-days">
+        ${p.days.map((d, di) => d === f.day ? '' :
+          `<button class="btn copy-day" data-day="${d.id}"><b>D${di + 1}</b> ${esc(d.date || '')} ${esc(d.title || '')}<span class="hint">${d.stops.length} 站</span></button>`).join('') ||
+          '<div class="hint">还没有其他天，先「＋天」。</div>'}
+      </div>
+    </div>`, { small: true });
+  $$('.seg .btn', m).forEach(b => b.onclick = () => {
+    pos = b.dataset.pos;
+    $$('.seg .btn', m).forEach(x => x.classList.toggle('btn-primary', x === b));
+  });
+  $$('.copy-day', m).forEach(b => b.onclick = () => {
+    const day = p.days.find(d => d.id === b.dataset.day); if (!day) return;
+    Panel.cloneStopToDay(f.stop, day, pos);
+    requestSave(); closeModal(); Panel.render(); MV.renderAll();
+    toast(`已复制「${f.stop.name}」到 D${p.days.indexOf(day) + 1} ${pos === 'start' ? '开头' : '末尾'}`);
+  });
 };
 
 Panel.amapRoute = async function (found) {
@@ -597,7 +738,7 @@ Panel.openHelp = function () {
       <h4>快速上手</h4>
       <ol class="help-steps">
         <li><b>看行程</b>：左侧按天（D1~D6）编排；点击上方日期徽章，地图会聚焦到当天的路线段。</li>
-        <li><b>改行程</b>：拖动停留点卡片可调顺序；「📍 添加地点」在地图上点一下即可插入新点；「📚 地点库」收录了三亚/陵水/万宁/中部山区等约 38 个常用地点。</li>
+        <li><b>改行程</b>：拖动停留点卡片可调顺序（有位置指示线，整列任意位置可松手）；拖到顶部日期签可直接移动到那一天；「⧉」把已有地点复制到另一天（如次日从同一酒店出发）；「📍 添加地点」在地图上点一下即可插入新点；「📚 地点库」收录了三亚/陵水/万宁/中部山区等约 38 个常用地点，顶部还列出方案里已有地点可一键复用。</li>
         <li><b>搜精准位置</b>：地图左上角搜索框输入酒店 / 景区 / 餐厅名（如"海棠湾 希尔顿"），结果可一键「添加为停留点」，或「修正」你放得不准的现有点位（需在设置里填一次免费高德 Key）。</li>
         <li><b>画路线</b>：两站之间默认是虚线草稿。点 <b>⚡</b> 用高德算出真实驾车距离和耗时（需在设置里填一次免费 Key）；或点 <b>🖋️</b> 沿着公路手工点击打点。</li>
         <li><b>记贴士</b>：地点和路线都能打开「✏️」卡片——分类标签、笔记、链接、图片（上传后压缩存本机）。</li>
@@ -627,17 +768,40 @@ Panel.openPoiLib = function () {
   const listEl = m.querySelector('#poi-list');
   const renderList = () => {
     const q = m.querySelector('#poi-search').value.trim().toLowerCase();
+    const p = currentPlan();
+    // 方案已有地点：一键复用（插入当前天末尾）
+    const reused = [];
+    p.days.forEach((d, di) => d.stops.forEach((s, si) => {
+      if (q && !s.name.toLowerCase().includes(q)) return;
+      const gnum = p.days.slice(0, di).reduce((acc, dd) => acc + dd.stops.length, 0) + si + 1;
+      reused.push(`<button class="poi-item" data-planstop-day="${d.id}" data-planstop-id="${s.id}"><span>${(STOP_TYPES[s.type] || STOP_TYPES.other).emoji} ${circledNum(gnum)} ${esc(s.name)} <span class="hint">（D${di + 1}）</span></span><span class="poi-add">＋</span></button>`);
+    }));
     const items = POI_LIB.filter(x => !q || x.name.toLowerCase().includes(q) || x.region.toLowerCase().includes(q));
     const groups = {};
     items.forEach(x => { (groups[x.region] = groups[x.region] || []).push(x); });
-    listEl.innerHTML = Object.entries(groups).map(([rg, arr]) => `
-      <div class="poi-group"><div class="poi-region">${esc(rg)}</div>
+    listEl.innerHTML =
+      `<div class="poi-region">⭐ 本方案已有地点</div>${reused.join('') || '<div class="hint">（无匹配）</div>'}
+      ` + (Object.entries(groups).map(([rg, arr]) => `
+      <div class="poi-region">${esc(rg)}</div>
         ${arr.map(x => `<button class="poi-item" data-poi="${esc(x.name)}"><span>${(STOP_TYPES[x.type] || STOP_TYPES.other).emoji} ${esc(x.name)}</span><span class="poi-add">＋</span></button>`).join('')}
-      </div>`).join('') || '<div class="hint">无匹配</div>';
+      `).join('') || '<div class="hint">无匹配</div>');
   };
   renderList();
   m.querySelector('#poi-search').addEventListener('input', renderList);
   listEl.addEventListener('click', (e) => {
+    const ps = e.target.closest('[data-planstop-id]');
+    if (ps) {
+      const srcDay = currentPlan().days.find(d => d.id === ps.dataset.planstopDay);
+      const src = srcDay && srcDay.stops.find(x => x.id === ps.dataset.planstopId);
+      if (!src) return;
+      const p = currentPlan();
+      let day = p.days.find(d => d.id === App.ui.activeDayId);
+      if (!day) { day = newDay({ title: '新的一天' }); p.days.push(day); App.ui.activeDayId = day.id; }
+      Panel.cloneStopToDay(src, day, 'end');
+      requestSave(); Panel.render(); MV.renderAll();
+      toast(`已把「${src.name}」插入 D${p.days.indexOf(day) + 1} 末尾`);
+      return;
+    }
     const b = e.target.closest('[data-poi]'); if (!b) return;
     const poi = POI_LIB.find(x => x.name === b.dataset.poi); if (!poi) return;
     const p = currentPlan();
