@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 临时 / 测试产物
+*.tmp
+.test_*
+*.log
+
+# 本地脚本（不随仓库分发）
+*.ps1
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store

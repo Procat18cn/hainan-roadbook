@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200, viewport-fit=cover">
+<meta name="description" content="海南岛自驾行程规划 · 单文件离线工具">
+<title>海南自驾 · 行程规划</title>
+<style>{{LEAFLET_CSS}}</style>
+<style>{{APP_CSS}}</style>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span class="brand-logo">🌴</span><span class="brand-name">海南自驾</span><span class="brand-sub">行程规划</span></div>
+    <button class="btn plan-btn" id="btn-plans" title="管理方案">🗂 <b id="plan-name">…</b> <span class="caret">▾</span></button>
+    <span id="top-stats" class="top-stats"></span>
+    <span id="save-indicator" class="save-indicator">●</span>
+    <span style="flex:1"></span>
+    <button class="btn btn-light" id="btn-poster">🖼️ 海报</button>
+    <button class="btn btn-light" id="btn-print">🖨️ 打印</button>
+    <button class="btn btn-light" id="btn-settings">⚙️ 设置</button>
+    <button class="btn btn-light" id="btn-help">❓ 帮助</button>
+  </header>
+  <div id="main">
+    <aside id="panel">
+      <div id="panel-body"></div>
+    </aside>
+    <div id="mapwrap">
+      <div id="map"></div>
+      <div id="search-box">
+        <input id="search-input" placeholder="🔍 搜地点 / 酒店 / 景区，回车搜索" autocomplete="off"/>
+        <div id="search-results" hidden></div>
+      </div>
+      <div id="maptools">
+        <button class="tool-btn" id="btn-add-stop" title="在地图上点击添加停留点">📍 添加地点</button>
+        <button class="tool-btn" id="btn-add-poi" title="从内置地点库选择">📚 地点库</button>
+        <div id="basemap-switcher" class="basemap-switcher">
+          <button data-bm="amap" title="高德标准底图（公路最全）">高德</button>
+          <button data-bm="sat" title="卫星影像">卫星</button>
+        </div>
+      </div>
+      <div id="drawbar" hidden>
+        <span class="draw-hint">🖋️ 沿公路点击打点 · 双击结束</span>
+        <span id="draw-count" class="draw-count">0 个途经点</span>
+        <button class="btn btn-xs" id="draw-undo">↩ 撤销</button>
+        <button class="btn btn-xs btn-primary" id="draw-done">✓ 完成</button>
+        <button class="btn btn-xs" id="draw-cancel">✕ 取消</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="print-root"></div>
+<script>{{LEAFLET_JS}}</script>
+<script>{{DATA_JS}}</script>
+<script>{{APP_JS}}</script>
+</body>
+</html>
