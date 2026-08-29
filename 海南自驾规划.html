@@ -2256,7 +2256,7 @@ Panel.buildDayCard = function (day) {
       </div>
       <span class="stop-btns">
         <button class="ibtn" data-act="stop-edit" title="编辑/备注" data-day="${day.id}" data-stop="${s.id}">✏️</button>
-        <button class="ibtn" data-act="stop-copy" title="复制到其他天（复用此地点，如次日同一酒店）" data-day="${day.id}" data-stop="${s.id}">⧉</button>
+        <button class="ibtn" data-act="stop-copy" title="复制停留点（可到任意一天，含本天）" data-day="${day.id}" data-stop="${s.id}">⧉</button>
         <button class="ibtn" data-act="stop-del" title="删除" data-day="${day.id}" data-stop="${s.id}">🗑</button>
       </span></div>`;
   }).join('');
@@ -2501,8 +2501,9 @@ Panel.moveStopToDay = function (stopId, toDayId) {
 Panel.cloneStopToDay = function (stop, day, pos) {
   const cp = JSON.parse(JSON.stringify(stop));
   cp.id = uid('s');
-  cp.leg = day.stops.length ? newLeg() : null;
-  if (pos === 'start') {
+  const insertStart = pos === 'start';
+  cp.leg = (!insertStart && day.stops.length) ? newLeg() : null;
+  if (insertStart) {
     day.stops.unshift(cp);
     if (day.stops[1] && !day.stops[1].leg) day.stops[1].leg = newLeg();
   } else {
@@ -2511,24 +2512,23 @@ Panel.cloneStopToDay = function (stop, day, pos) {
   return cp;
 };
 
-/* 「⧉ 复制到其他天」弹窗：选插入位置 + 目标天 */
+/* 「⧉ 复制停留点」弹窗：选插入位置 + 目标天（任意一天，含当天——环线日出发/返回同一酒店） */
 Panel.openCopyStop = function (dayId, stopId) {
   const f = findStop(dayId, stopId); if (!f) return;
   const p = currentPlan();
   let pos = 'end';
   const m = showModal(`
-    <h3>⧉ 复制到其他天 <span class="hint">「${esc(f.stop.name)}」将作为独立副本加入，之后两边互不联动</span></h3>
+    <h3>⧉ 复制停留点 <span class="hint">「${esc(f.stop.name)}」将作为独立副本加入所选位置，之后互不联动</span></h3>
     <div class="modal-body">
       <div class="form-row"><label>插入位置</label>
         <div class="seg">
-          <button class="btn btn-xs btn-primary" data-pos="end">当天末尾</button>
-          <button class="btn btn-xs" data-pos="start">当天开头</button>
+          <button class="btn btn-xs btn-primary" data-pos="end">所选天 末尾</button>
+          <button class="btn btn-xs" data-pos="start">所选天 开头</button>
         </div>
       </div>
       <div class="copy-days">
-        ${p.days.map((d, di) => d === f.day ? '' :
-          `<button class="btn copy-day" data-day="${d.id}"><b>D${di + 1}</b> ${esc(d.date || '')} ${esc(d.title || '')}<span class="hint">${d.stops.length} 站</span></button>`).join('') ||
-          '<div class="hint">还没有其他天，先「＋天」。</div>'}
+        ${p.days.map((d, di) =>
+          `<button class="btn copy-day" data-day="${d.id}"><b>D${di + 1}</b> ${esc(d.date || '')} ${esc(d.title || '')}${d === f.day ? '<span class="cur-badge">本天</span>' : ''}<span class="hint">${d.stops.length} 站</span></button>`).join('')}
       </div>
     </div>`, { small: true });
   $$('.seg .btn', m).forEach(b => b.onclick = () => {
@@ -2908,7 +2908,7 @@ Panel.openHelp = function () {
       <h4>快速上手</h4>
       <ol class="help-steps">
         <li><b>看行程</b>：左侧按天（D1~D6）编排；点击上方日期徽章，地图会聚焦到当天的路线段。</li>
-        <li><b>改行程</b>：拖动停留点卡片可调顺序（有位置指示线，整列任意位置可松手）；拖到顶部日期签可直接移动到那一天；「⧉」把已有地点复制到另一天（如次日从同一酒店出发）；「📍 添加地点」在地图上点一下即可插入新点；「📚 地点库」收录了三亚/陵水/万宁/中部山区等约 38 个常用地点，顶部还列出方案里已有地点可一键复用。</li>
+        <li><b>改行程</b>：拖动停留点卡片可调顺序（有位置指示线，整列任意位置可松手）；拖到顶部日期签可直接移动到那一天；「⧉」把地点复制到任意一天（含本天——环线日出发/返回同一酒店时，复制两个到当天开头/末尾即可）；「📍 添加地点」在地图上点一下即可插入新点；「📚 地点库」收录了三亚/陵水/万宁/中部山区等约 38 个常用地点，顶部还列出方案里已有地点可一键复用。</li>
         <li><b>搜精准位置</b>：地图左上角搜索框输入酒店 / 景区 / 餐厅名（如"海棠湾 希尔顿"），结果可一键「添加为停留点」，或「修正」你放得不准的现有点位（需在设置里填一次免费高德 Key）。</li>
         <li><b>画路线</b>：两站之间默认是虚线草稿。点 <b>⚡</b> 用高德算出真实驾车距离和耗时（需在设置里填一次免费 Key）；或点 <b>🖋️</b> 沿着公路手工点击打点。</li>
         <li><b>记贴士</b>：地点和路线都能打开「✏️」卡片——分类标签、笔记、链接、图片（上传后压缩存本机）。</li>
