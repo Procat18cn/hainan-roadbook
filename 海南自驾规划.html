@@ -2950,7 +2950,7 @@ Panel.openPoiLib = function () {
     const groups = {};
     items.forEach(x => { (groups[x.region] = groups[x.region] || []).push(x); });
     listEl.innerHTML =
-      `<div class="poi-region">⭐ 本方案已有地点</div>${reused.join('') || '<div class="hint">（无匹配）</div>'}
+      `<div class="poi-region">⭐ 本方案已有地点 · 点击插入当前天末尾</div>${reused.join('') || '<div class="hint">（无匹配）</div>'}
       ` + (Object.entries(groups).map(([rg, arr]) => `
       <div class="poi-region">${esc(rg)}</div>
         ${arr.map(x => `<button class="poi-item" data-poi="${esc(x.name)}"><span>${(STOP_TYPES[x.type] || STOP_TYPES.other).emoji} ${esc(x.name)}</span><span class="poi-add">＋</span></button>`).join('')}
