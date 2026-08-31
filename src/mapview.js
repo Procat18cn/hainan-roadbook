@@ -59,7 +59,7 @@ MV.init = function () {
   MV.setBasemap(App.settings.basemap || 'amap');
 
   MV.map.on('click', (e) => {
-    if (MV.addMode) { MV.addMode = false; $('#map').classList.remove('crosshair'); updateToolStates(); Panel.addStopAt(e.latlng); return; }
+    if (MV.addMode) { MV.addMode = false; $('#map').classList.remove('crosshair'); updateToolStates(); Pick.start(e.latlng); return; }
     if (MV.draw) { MV.draw.pts.push([fromMap(e.latlng).lng, fromMap(e.latlng).lat]); MV.renderDrawPreview(); }
   });
   MV.map.on('dblclick', () => { if (MV.draw) { MV.finishDraw(); } });
@@ -243,7 +243,7 @@ MV.toggleAddMode = function () {
   if (MV.addMode && MV.draw) MV.exitDraw();
   $('#map').classList.toggle('crosshair', MV.addMode);
   updateToolStates();
-  if (MV.addMode) toast('点击地图放置新停留点（再次点击按钮取消）');
+  if (MV.addMode) toast(App.settings.amapKey ? '点击地图：自动识别附近地点（再次点击按钮取消）' : '点击地图放置新停留点（再次点击按钮取消）');
 };
 function updateToolStates() {
   const b = $('#btn-add-stop'); if (b) b.classList.toggle('on', MV.addMode);
@@ -418,6 +418,164 @@ Search.applyFix = function (v, poi) {
 
 Search.clearPreview = function () {
   if (Search.preview) { MV.map.removeLayer(Search.preview); Search.preview = null; }
+};
+
+/* ---------- 添加地点 · 点选反查：点击地图 → 列出附近高德 POI，一键带名加入/修正 ---------- */
+const Pick = { popup: null, ctx: null };
+
+/* 查询半径随缩放级别：越放大查得越精（米） */
+function pickRadius() {
+  const z = MV.map.getZoom();
+  return z >= 16 ? 80 : z >= 15 ? 120 : z >= 13 ? 250 : 500;
+}
+
+Pick.start = function (latlng) {
+  if (!App.settings.amapKey) { Panel.addStopAt(latlng); return; } // 无 Key：保持原直接落点行为
+  toast('查询附近地点…');
+  ensureAMap().then(() => {
+    AMap.plugin('AMap.PlaceSearch', () => {
+      const ps = new AMap.PlaceSearch({ city: '海南省', citylimit: true, pageSize: 8, extensions: 'base' });
+      // 底图为高德瓦片时 Leaflet 点击坐标即 GCJ 显示坐标，可直接交给高德接口
+      ps.searchNearBy('', [latlng.lng, latlng.lat], pickRadius(), (status, result) => {
+        const pois = status === 'complete' && result.poiList && result.poiList.pois ? result.poiList.pois : [];
+        const usable = pois.filter(p => p && p.location).slice(0, 6);
+        if (usable.length) Pick.showPopup(latlng, usable);
+        else Panel.addStopAt(latlng); // 周围没有收录的 POI：退回直接落点
+      });
+    });
+  }).catch(() => Panel.addStopAt(latlng)); // Key/网络异常：退回直接落点
+};
+
+Pick.close = function () {
+  if (Pick.popup) { MV.map.closePopup(Pick.popup); Pick.popup = null; Pick.ctx = null; }
+};
+
+Pick.showPopup = function (latlng, pois) {
+  Pick.close();
+  Pick.ctx = { latlng, pois };
+  Pick.popup = L.popup({ maxWidth: 320 }).setLatLng(latlng).setContent(Pick.listHtml()).openOn(MV.map);
+  // 阻止弹窗内点击冒泡到地图容器：Leaflet 1.1.1 的 closePopupOnClick 会在 preclick 阶段
+  // 关闭弹窗，多步交互（切换修正模式）会在第二步前被误关；禁用后点击弹窗外地图仍可关闭
+  Pick._guard();
+  // remove 时只清引用、保留 ctx：个别环境的合成事件会绕过冒泡拦截导致弹窗被误关，
+  // 下一步交互时可凭 ctx 原地恢复（见 Pick.render）
+  Pick.popup.on('remove', () => { Pick.popup = null; });
+  Pick.bind();
+};
+
+Pick._guard = function () {
+  L.DomEvent.disableClickPropagation(Pick.popup.getElement());
+  L.DomEvent.disableScrollPropagation(Pick.popup.getElement());
+};
+
+Pick.render = function (mode) {
+  if (!Pick.ctx) return;
+  const html = mode === 'fix' ? Pick.fixHtml() : Pick.listHtml();
+  if (!Pick.popup) { // 弹窗已被误关：凭 ctx 在原位置恢复
+    Pick.popup = L.popup({ maxWidth: 320 }).setLatLng(Pick.ctx.latlng).setContent(html).openOn(MV.map);
+    Pick._guard();
+    Pick.popup.on('remove', () => { Pick.popup = null; });
+  } else {
+    Pick.popup.setContent(html);
+  }
+  Pick.bind();
+};
+
+Pick.bind = function () {
+  const el = Pick.popup.getElement();
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const { act, i } = b.dataset;
+    if (act === 'pick-add') Pick.applyAdd(+i);
+    else if (act === 'pick-here') Pick.addHere();
+    else if (act === 'pick-fix-mode') Pick.render('fix');
+    else if (act === 'pick-back') Pick.render('list');
+    else if (act === 'pick-fix') { const v = el.querySelector('#pick-target').value; if (v) Pick.applyFix(v, +i); }
+  });
+};
+
+function pickDistText(p) {
+  const d = +p.distance;
+  return (p.distance !== undefined && p.distance !== null && p.distance !== '' && isFinite(d)) ? ` · 约${Math.round(d)}m` : '';
+}
+
+Pick.listHtml = function () {
+  const rows = Pick.ctx.pois.map((p, i) => {
+    const t = STOP_TYPES[guessStopType(p.type)] || STOP_TYPES.other;
+    const addr = [(p.district || '').replace(/^海南省/, ''), p.address].filter(Boolean).join(' ');
+    return `<div class="search-item pick-item" data-act="pick-add" data-i="${i}">
+      <div class="si-name">${t.emoji} ${esc(p.name)}</div>
+      <div class="si-addr">${esc(addr)}${pickDistText(p)}</div>
+    </div>`;
+  }).join('');
+  return `<div class="stop-pop pick-pop">
+    <div class="pop-head"><b>📍 这附近有</b><span class="hint">点选加入行程</span></div>
+    <div class="pick-list">${rows}</div>
+    <div class="pop-btns">
+      <button class="btn btn-xs" data-act="pick-here">↧ 就放在这里</button>
+      <button class="btn btn-xs" data-act="pick-fix-mode">📍 修正现有点</button>
+    </div>
+  </div>`;
+};
+
+Pick.fixHtml = function () {
+  const opts = currentPlan().days.map((d, di) =>
+    `<optgroup label="D${di + 1} ${esc(d.title || d.date || '')}">` +
+    d.stops.map(s => `<option value="${d.id}|${s.id}">${esc(s.name)}</option>`).join('') +
+    `</optgroup>`).join('');
+  const rows = Pick.ctx.pois.map((p, i) => {
+    const addr = [(p.district || '').replace(/^海南省/, ''), p.address].filter(Boolean).join(' ');
+    return `<div class="search-item pick-item" data-act="pick-fix" data-i="${i}">
+      <div class="si-name">📍 ${esc(p.name)}</div>
+      <div class="si-addr">${esc(addr)}${pickDistText(p)}</div>
+    </div>`;
+  }).join('');
+  return `<div class="stop-pop pick-pop">
+    <div class="pop-head"><b>修正现有停留点</b><a href="javascript:void 0" class="pick-back" data-act="pick-back">← 返回列表</a></div>
+    <div class="pop-fixrow"><select id="pick-target">${opts || '<option value="">暂无停留点</option>'}</select></div>
+    <div class="hint" style="margin:4px 0 2px">先选要修正的停留点，再点下方某个精准位置（其前后路线段恢复为草稿）</div>
+    <div class="pick-list">${rows}</div>
+  </div>`;
+};
+
+Pick.applyAdd = function (i) {
+  if (!Pick.ctx) return;
+  const p = Pick.ctx.pois[i]; if (!p || !p.location) return;
+  Pick.ctx = null; // 终止性动作入口即失效，防重入
+  const w = GCJ.gcj2wgs(p.location.lng, p.location.lat);
+  Pick.close();
+  const p0 = currentPlan();
+  let day = p0.days.find(d => d.id === App.ui.activeDayId);
+  if (!day) { day = newDay({ title: '新的一天' }); p0.days.push(day); App.ui.activeDayId = day.id; }
+  const s = newStop({ name: p.name, type: guessStopType(p.type), lng: w[0], lat: w[1] });
+  if (day.stops.length) s.leg = newLeg();
+  day.stops.push(s);
+  requestSave(); Panel.render(); MV.renderAll();
+  toast(`已添加「${p.name}」到 D${p0.days.indexOf(day) + 1}`);
+};
+
+Pick.addHere = function () {
+  if (!Pick.ctx) return;
+  const ll = Pick.ctx.latlng;
+  Pick.ctx = null; // 终止性动作入口即失效，防重入
+  Pick.close();
+  Panel.addStopAt(ll); // 原行为：未命名落点 + 打开编辑器
+};
+
+Pick.applyFix = function (v, i) {
+  if (!Pick.ctx) return;
+  const p = Pick.ctx.pois[i]; if (!p || !p.location) return;
+  Pick.ctx = null; // 终止性动作入口即失效，防重入
+  const [dayId, stopId] = v.split('|');
+  const f = findStop(dayId, stopId); if (!f) return;
+  const w = GCJ.gcj2wgs(p.location.lng, p.location.lat);
+  f.stop.lng = w[0]; f.stop.lat = w[1];
+  f.stop.leg = newLeg({ note: f.stop.leg ? f.stop.leg.note : newNote() });
+  const next = f.day.stops[f.index + 1];
+  if (next) next.leg = newLeg({ note: next.leg ? next.leg.note : newNote() });
+  Pick.close();
+  requestSave(); MV.renderAll(); Panel.render();
+  toast(`已将「${f.stop.name}」修正到「${p.name}」的精准位置`);
 };
 
 /* ---------- 视角 ---------- */

@@ -232,6 +232,13 @@ textarea { resize: vertical; width: 100%; }
 .pop-fixrow { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
 .pop-fixrow select { flex: 1; min-width: 0; font-size: 12px; padding: 5px 7px; }
 
+/* 点选反查弹窗 */
+.pick-list { max-height: 236px; overflow-y: auto; margin: 7px 0 2px; border-top: 1px solid var(--line); }
+.pick-item { cursor: pointer; }
+.pick-item:hover .si-name { color: var(--teal); }
+.pick-back { margin-left: auto; font-size: 12px; color: var(--teal); text-decoration: none; font-weight: 600; }
+.pick-back:hover { color: var(--coral); }
+
 /* Leaflet 标记 */
 .stop-marker {
   width: 30px; height: 30px; border-radius: 50% 50% 50% 4px;
